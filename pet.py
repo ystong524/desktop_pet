@@ -1,19 +1,27 @@
 """
+Desktop pet
+##ref: https://seebass22.github.io/python-desktop-pet-tutorial/2021/05/16/desktop-pet.html
+
 TODO:
 [done] add stationary, dragging modes
 [pending] add more complex moving pattern-->zigzag, labyrinth-like
 [done] switching between modes-->switch to xx when stationary for certain period
-[pending] manage when to switch mdoes--> added random, pending sequence
-[pending] scaling, speed to be decided during init of class
+[pending] manage when to switch modes--> added random, pending sequence
+[done] scaling, speed to be decided during init of class instead of hardcode
+[pending] control gif frame update interval too?
+[pending] in random mode, avoid out of screen for too long?
+[pending] scaling during init of class/remove this, scale when preparing gifs
+[pending] include graphical indicator for mode change/drag mode
 
 DEBUG:
 [done] window event callback run twice
 --should bind at label level (self._label) instead of self._window
 --see: https://stackoverflow.com/a/71187557
 --see: https://www.astro.princeton.edu/~rhl/Tcl-Tk_docs/tk/bind.n.html
-[pending] smoothen drag mode
-[pending] right button event seems to involve enter & leave events
-[pending] in random mode, avoid out of screen for too long?
+[done] smoothen drag mode
+--fixed logic with self._drag
+[done] right button event seems to involve enter & leave events
+--bypass the callback with self._drag
 
 THINK:
 in case of stationary mode, use a bool variable to bypass time comparison route
@@ -23,9 +31,11 @@ or
 use similar update route but do nothing
 --self._x_incre, self._y_incre = 0, 0
 --set self._pattern_dur = 1 (this will be the resolution to detect change in mode)
+
+THINK: refresh time first or frame first?
+THINK: for staionary motion pattern duration, why 1s? or follow mainloop? or does it matter since bypassed?
 """
 
-##ref: https://seebass22.github.io/python-desktop-pet-tutorial/2021/05/16/desktop-pet.html
 import tkinter as tk
 import time
 import random
@@ -41,7 +51,6 @@ def resource_path(path_name):
         to the directory of this script or sys._MEIPASS"""
     base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, path_name)
-
 
 """ ------- window size ------- """
 def get_win_geometry(exclude_taskbar=False):
@@ -67,16 +76,8 @@ def random_direct_step(lower=1, upper=10):
     direction (backward-, stationary 0, forward +) and steps to be taken
     """
     direct = random.choice([-1, 1])
-    if direct == 0:  ##TODO: allow stationary?
-        return 0
     step = random.randrange(lower, upper)
     return direct * step
-
-def random_small():
-    return random_motion(x_lower=1, x_upper=5, y_lower=1, y_upper=5)
-
-def random_large():
-    return random_motion(x_lower=10, x_upper=30, y_lower=10, y_upper=30)
 
 def stationary():
     return 0, 0
@@ -100,6 +101,7 @@ def extract_gif(gif_src):
 class Window(object):
     def __init__(self, img_src=None, gif_src=None,
                  exclude_taskbar=True, lim_w=30, lim_h=30,
+                 rest_time=5,
                  print_fn=None):
         ##init window
         self._window = tk.Tk()
@@ -114,6 +116,7 @@ class Window(object):
         self._exclude_taskbar = exclude_taskbar
         self._lim_w = lim_w
         self._lim_h = lim_h
+        self._rest_time = rest_time  ##initial staionary timeout in seconds for "Stay" mode
         self._print_fn = print_fn
         if self._print_fn is None:
             def empty(*a):
@@ -143,7 +146,29 @@ class Window(object):
         self._stationary = False
         self._stationary_ts = None
         self._drag = False
-        self._mms = {0: stationary, 1: random_small, 2: random_large, 3: stationary}  ##movement modes
+        
+        ##  determine small & large increment steps by screen size
+        ##  mainloop update per 10ms
+        ##  consider at least 1px to 5s across screen as small (1 to 500 steps)
+        ##  consider 5s to 1s across screen as large (500 to 100 steps)
+        self.__update_interval = 10  ##milliseconds
+        def get_steps(dur, interval, dist):
+            ## steps to take dur(s) to travel dist(px) given update interval(ms)
+            x = dur*1000/interval
+            return int(round(dist/x, 0))
+        
+        def random_small():
+            return random_motion(x_lower=1, x_upper=get_steps(5, self.__update_interval, self._win_w),
+                                 y_lower=1, y_upper=get_steps(5, self.__update_interval, self._win_h))
+
+        def random_large():
+            return random_motion(x_lower=get_steps(5, self.__update_interval, self._win_w),
+                                 x_upper=get_steps(1, self.__update_interval, self._win_w),
+                                 y_lower=get_steps(5, self.__update_interval, self._win_h),
+                                 y_upper=get_steps(1, self.__update_interval, self._win_h))
+        ##movement modes
+        self._mms = {0: stationary, 1: random_small, 2: random_large, 3: stationary}  
+        
         ##control gif change
         self._gif_dict = {}
         self._gif_key_id = 0
@@ -194,8 +219,8 @@ class Window(object):
         ##label event bind
         def mode_func(self, mode_key, name, overwrite=False):
             def change_mode(*event):
+                self._random_mode = False
                 self._change_mode(mode_key, overwrite=overwrite)
-                self._print_fn("change mode", name)
             return change_mode
         
         self._label.bind("<Button-1>", self._change_gif)
@@ -217,15 +242,10 @@ class Window(object):
         
         ##mainloop
         self._update()  ##init call, else window shown packed without image update in a glimpse
-#        self._time = time.time()  ##update time now
-#        while not(self._x_incre or self._y_incre):  ##skip this if initial mode is stationary
-#            self._moving_pattern()  ##first pattern
-#        self._window.after(0, self._update)  ##run ._update now to start the recursive loop
-        
-        #self._window.withdraw()
-        #self._window.deiconify()
-#        self._window.protocol("WM_DELETE_WINDOW", self._window.iconify)
         self._window.mainloop()  ##start window loop here
+    
+    def _set_random(self):
+        self._random_mode = True
     
     def _update_win_pos(self):
         if self._stationary or self._drag:
@@ -264,7 +284,7 @@ class Window(object):
         
     def _update_image(self, zoom=True, scale=1):
         self._frame_id = (self._frame_id + 1) % self._frame_num
-        if scale != 1:  ##TODO: scaling during init of class
+        if scale != 1:  ##TODO: scaling during init of class/remove this, scale when preparing gifs
             if zoom:
                 self._img = self._gif[self._frame_id].zoom(scale, scale)
             else:
@@ -277,31 +297,37 @@ class Window(object):
         
     def _update(self):
         ##motion pattern
-        ##if current time surpass last pattern duration, obtain a new pattern
-        if not self._stationary:  ##use a bool here, save some computation
-            if (time.time() - self._pattern_time) > self._pattern_dur:
-                self._moving_pattern()  ##obtain x,y increment based on motion mode
-                if self._random_mode:
-                    if random.choice([0, 1]):  ##random choose gif images
-                        self._print_fn("random gif")
-                        self._change_gif(None, num=random.randrange(1, len(self._gif_dict)-1))
-        else:
-            if (time.time() - self._stationary_ts) > 5:  ##change to random_small mode after 5 seconds of stationary mode
-                self._print_fn("break stationary")
-                self._change_mode(1, overwrite=False)
+        if not self._drag:  ##skip motion pattern computation in drag mode
+            ##if current time surpass last pattern duration, obtain a new pattern
+            if self._stationary:
+                ##change to random_small mode after x seconds of stationary mode
+                if (time.time() - self._stationary_ts) > self._rest_time:  
+                    self._print_fn("break stationary")
+                    self._change_mode(1, overwrite=True)
+            else:
+                ##obtain motion pattern according to mode and duration timeout
+                if (time.time() - self._pattern_time) > self._pattern_dur:
+                    self._moving_pattern()  ##obtain x,y increment based on motion mode
+            
+                    ##random gif change in random mode when timeout
+                    if self._random_mode:
+                        if random.choice([0, 1]):  ##random choose gif images
+                            self._print_fn("random gif")
+                            self._change_gif(None, num=random.randrange(1, len(self._gif_dict)-1))
+                
             
         ##update gif image frame
-        if (time.time() - self._time) > 0.05:  ##TODO: skip addition every loop, instead add on the _time
-            self._time = time.time()  ##TODO: refresh time first or frame
+        if (time.time() - self._time) > 0.05:  ##TODO: control gif frame update interval too?
+            self._time = time.time()  ##THINK: refresh time first or frame first?
             
-            ##update window and label (boundary control)
+            ##update window and label (position & boundary control)
             self._update_win_pos()
             
             ##update to image (frame & scale control)
             self._update_image(zoom=True, scale=1)
         
         ##execute update
-        self._window.after(10, self._update)  ##call ._update recursively
+        self._window.after(self.__update_interval, self._update)  ##call ._update recursively every x ms
     
     def _moving_pattern(self):
         if self._random_mode:
@@ -311,6 +337,9 @@ class Window(object):
         if self._x_incre or self._y_incre:
             self._pattern_dur = round(random.random() * 10, 2)
         else:
+            ##if no increment on position, use duration 1s for next update
+            ##to avoid lack of response due to execution of the pattern
+            ## THINK: why 1s? or follow mainloop?
             self._pattern_dur = 1
         self._pattern_time = time.time()
         self._print_fn("pattern", self._pattern_dur, self._x_incre, self._y_incre)
@@ -325,10 +354,18 @@ class Window(object):
                                   (w=w, h=h, x=self._x, y=self._y))  ##we're moving window
             
     def _drag_release(self, event):
-        self._change_mode(0, overwrite=True)
-        self._print_fn("release stationary")
+        ##set to default small modetion mode and exit drag mode
+        if self._drag:
+            self._drag = False
+            self._change_mode(1, overwrite=True)
+            self._print_fn("release drag")
     
     def _change_mode(self, mode_key, overwrite=False):
+        if self._drag:  ##skip if already in drag mode
+            self._stationary = False
+            self._random_mode = False
+            return
+        
         if mode_key in self._mms:
             self._last_mode = self._mode
             self._mode = mode_key
@@ -339,22 +376,20 @@ class Window(object):
                 self._print_fn("overwrite last", self._last_mode)
                 
         ##handle states
-        self._drag = (self._mode == 3)  ##prioritize drag mode
+        self._drag = (self._mode == 3)  ##check for drag mode, prioritize
         if self._drag:
             self._stationary = False
             self._random_mode = False
         else:
-            if self._mode == 0:
+            if self._mode == 0:  ##check for stationary mode
                 if not self._stationary:
                     self._stationary_ts = time.time()  ##timestamp when first changed to stationary mode
                 self._stationary = True
             else:
                 self._stationary = False
-        ##update duration
+                
+        ##set pattern duration to 0 to force 
         self._pattern_dur = 0
-        
-    def _set_random(self):
-        self._random_mode = True
         
     def _resume_mode(self, event):
         if self._drag:  ##skip if in drag mode
@@ -385,7 +420,6 @@ if __name__ == "__main__":
     for f in os.listdir(src):
         if f.lower().endswith(".gif"):
             gif_src.append(os.path.join(src, f))
-#    Window(gif_src="src/baby_flower.gif")
     Window(gif_src=gif_src, print_fn=None)
     sys.exit()
 
