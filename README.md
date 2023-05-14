@@ -10,7 +10,9 @@ This work is initiated for personal exploration and practice.
 ## Content
 This repo includes:
 1. Source code in Python
+i.e. pet.py
 2. .bat file for running [pyinstaller](https://pypi.org/project/pyinstaller/) and its builds
+i.e. dist\pet.exe
 
 ## Disclaimer
 I hereby declare that I do not own the rights to the images/GIFs in the directory "src". All rights belong to the owner. No Copyright Infringement Intended.
